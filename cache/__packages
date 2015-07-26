@@ -1,0 +1,15 @@
+base
+ggplot2
+xtable
+knitr
+AppliedPredictiveModeling
+lattice
+caret
+rpart
+pgmm
+ElemStatLearn
+randomForest
+survival
+gbm
+plyr
+rpart.plot
