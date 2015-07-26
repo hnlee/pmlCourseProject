@@ -1,0 +1,133 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Hana Lee"
+output: html_document
+keep_md: true
+---
+
+# Predicting execution of bicep curls from accelerometer data
+
+## SYNOPSIS
+
+Given a data set of accelerometer measurements taken while subjects were performing bicep curls in five different ways, our aim was to develop a model that could accurately predict which class of activity was being performed at any time point. I used 52 variables that provided meaningful data as predictors and tested both a classification tree method and a random forests method. Cross-validation showed that the latter was able to predict test data with high accuracy.
+
+## OBTAINING THE DATA
+
+```{r settings, echo=FALSE}
+opts_chunk$set(echo="TRUE")
+```
+
+The original data set was collected and published by [Velloso _et al._](http://groupware.les.inf.puc-rio.br/har). A training set was randomly sampled and provided at [https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv).
+
+I loaded the following libraries and the CSV into R.
+
+```{r loaddata, cache=TRUE}
+library(ggplot2)
+library(knitr)
+library(caret)
+library(rpart.plot)
+pmlTraining <- read.csv("pml-training.csv", row.names=1)
+dim(pmlTraining)
+```
+
+The data set contained 19,622 rows and 159 variables. Our goal was to predict the final column, `classe`, which describes the type of bicep curl performed, according to one of the five classes defined by the data's authors:
+
+> exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+## PARTITIONING THE DATA
+
+In order to be able to assess the performance of any model developed, I first partitioned 40% of the provided training data into a separate set for cross-validation by random sampling.
+
+```{r crossvalidation, cache=TRUE}
+set.seed(94913491)
+inTrain <- createDataPartition(y=pmlTraining$classe, p=0.6, list=FALSE)
+training <- pmlTraining[inTrain,]
+validating <- pmlTraining[-inTrain,]
+```
+
+I set aside the set for cross-validation and only used the remaining training data for exploratory data analysis and model fitting.
+
+## CHOOSING PREDICTORS
+
+An initial look at the 158 variables that could be potential predictors for `classe` showed that the first six columns contained metadata that were specific to the experiment in which the data was collected. `user_name` specified the person doing the activity; `raw_timestamp_part_1`, `raw_timestamp_part_2` and `cvtd_timestamp` recorded the time; and `new_window` and `num_window` were used by the data's authors for their sliding window analysis to calculate summary statistics.
+
+```{r metadata}
+head(training[,1:6])
+```
+
+However, these variables were not useful for a generalizable model, which should be able to predict the type of activity without depending on prior information about the individual performing the exercise or on the time at which the measurements are taken. Furthermore, the model we were developing would not be given windows of time series data as input but rather single time points. Thus, I did not use these variables as predictors.
+
+Examinining the remaining columns in the training set revealed that many had missing values, denoted either as `NA` or empty strings. Eliminating these variables left us with 52 potential predictors.
+
+```{r missingvalues}
+missingvalues <- colSums(training[,7:158] == "")
+predictors <- names(missingvalues)[which(missingvalues == 0)]
+length(predictors)
+```
+
+I checked to see if any of these predictors showed too little variance across the data set to be useful as predictors. The metrics used tested to see if the frequency ratio of the most common value to the second-most common value exceeded 19.0 and if the percentage of unique values out of the total number of samples was less than 10%. None of the predictors met both thresholds for having near zero variance, so I proceeded with using all 52 for fitting our model.
+
+```{r nzv}
+nzvMetrics <- nearZeroVar(as.data.frame(training[,predictors]),
+                          saveMetrics=TRUE)
+```
+
+## FITTING MODELS AND ASSESSING ERROR
+
+### Classification tree
+
+Since our goal is to predict a categorical variable, the first method I used was the classification tree algorithm implemented in `rpart`.
+
+```{r rpart, cache=TRUE}
+rpartModel1 <- train(classe ~ ., 
+                     data=training[,c(predictors, "classe")], 
+                     method="rpart")
+```
+
+However, when I used the model to predict `classe` on the test set for cross-validation, I found that the accuracy was only about 48%, and the sensitivity of the model varied hugely among the five classes. In particular, the model was completely unable to predict class D.
+
+```{r rpartvalidation}
+rpartPredict1 <- predict(rpartModel1, newdata=validating[,predictors])
+confusionMatrix(rpartPredict1, validating$classe)
+rpartPlot <- ggplot(data=validating, 
+                    aes(x=classe, y=rpartPredict1)) +
+  geom_point() + 
+  xlab("Validation set activity class") +
+  ylab("Predicted activity class") +
+  scale_y_discrete(limits=c("A","B","C","D","E")) +
+  stat_sum(aes(group=1)) +
+  scale_size(range=c(1,10))
+rpartPlot
+```
+
+The reason became clear when looking at the decision tree resulting from the model: there is no leaf that results in class D.
+
+```{r rparttree}
+prp(rpartModel1$finalModel, varlen=0)
+```
+
+### Random forests
+
+Next, I used a random forests algorithm implemented in `randomForest`, which creates multiple classification trees through bootstrapping and votes on the majority result from all the trees. Thus, the prediction method is less vulnerable to the weaknesses of any one given classification tree.
+
+```{r rf, cache=TRUE}
+rfModel1 <- train(classe ~ .,
+                  data=training[,c(predictors, "classe")],
+                  method="rf")
+```
+
+This method had 99% accuracy when cross-validated against the test data set and seemed to predict all five classes with similar sensitiviy.
+
+```{r rfvalidation}
+rfPredict1 <- predict(rfModel1, newdata=validating[,predictors])
+confusionMatrix(rfPredict1, validating$classe)
+rfPlot <- ggplot(data=validating, 
+                 aes(x=classe, y=rfPredict1)) +
+  geom_point() + 
+  xlab("Validation set activity class") +
+  ylab("Predicted activity class") +
+  stat_sum(aes(group=1)) +
+  scale_size(range=c(1,10))
+rfPlot
+```
+
